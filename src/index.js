@@ -8,7 +8,7 @@ import {
 } from 'discord.js';
 import { commands } from './commands/commands.js';
 import { runCheck } from './monitor/engine.js';
-import { createTestEmbed } from './services/embed.js';
+import { createTestModEmbed } from './services/embed.js';
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds]
@@ -124,10 +124,10 @@ client.on('interactionCreate', async (interaction) => {
         return;
       }
 
-      await channel.send({ embeds: [createTestEmbed()] });
+      await channel.send({ embeds: [createTestModEmbed()] });
 
       await interaction.reply({
-        content: 'Test-Embed wurde erfolgreich gesendet.',
+        content: 'Test-Modupdate wurde erfolgreich gesendet.',
         flags: MessageFlags.Ephemeral
       });
       return;
