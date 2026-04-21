@@ -1,9 +1,9 @@
-import Gamedig from "gamedig";
+import Gamedig from 'gamedig';
 
 export async function checkServer(host, port) {
   try {
     await Gamedig.query({
-      type: "dayz",
+      type: 'dayz',
       host,
       port
     });
