@@ -12,7 +12,7 @@ const config = {
   channelId: process.env.ANNOUNCE_CHANNEL_ID
 };
 
-client.once("ready", () => {
+client.once("clientReady", () => {
   console.log("Bot is online");
 });
 
