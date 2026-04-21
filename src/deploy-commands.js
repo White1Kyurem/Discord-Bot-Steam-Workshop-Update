@@ -7,7 +7,8 @@ const clientId = process.env.DISCORD_CLIENT_ID;
 const guildId = process.env.DISCORD_GUILD_ID;
 
 if (!token || !clientId || !guildId) {
-  console.error('Fehlende ENV Variablen: DISCORD_TOKEN, DISCORD_CLIENT_ID oder DISCORD_GUILD_ID');
+  console.error('❌ Fehlende ENV Variablen!');
+  console.error('Benötigt: DISCORD_TOKEN, DISCORD_CLIENT_ID, DISCORD_GUILD_ID');
   process.exit(1);
 }
 
@@ -15,17 +16,18 @@ const rest = new REST({ version: '10' }).setToken(token);
 
 async function main() {
   try {
-    console.log('Registriere Slash-Commands...');
+    console.log('🔄 Registriere Slash-Commands...');
 
     await rest.put(
       Routes.applicationGuildCommands(clientId, guildId),
-      { body: commands.map(cmd => cmd.toJSON()) }
+      {
+        body: commands.map((cmd) => cmd.toJSON()),
+      }
     );
 
-    console.log('Slash-Commands erfolgreich registriert.');
+    console.log('✅ Slash-Commands erfolgreich registriert!');
   } catch (error) {
-    console.error('Fehler beim Registrieren der Commands:', error);
-    process.exit(1);
+    console.error('❌ Fehler beim Registrieren:', error);
   }
 }
 
