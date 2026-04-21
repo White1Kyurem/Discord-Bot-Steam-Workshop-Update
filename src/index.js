@@ -1,7 +1,14 @@
 import 'dotenv/config';
-import { Client, GatewayIntentBits, REST, Routes } from 'discord.js';
+import {
+  Client,
+  GatewayIntentBits,
+  REST,
+  Routes,
+  MessageFlags
+} from 'discord.js';
 import { commands } from './commands/commands.js';
 import { runCheck } from './monitor/engine.js';
+import { createTestEmbed } from './services/embed.js';
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds]
@@ -79,21 +86,49 @@ client.on('interactionCreate', async (interaction) => {
           `Notifications: ${notificationsEnabled ? 'an' : 'aus'}`,
           `Server Host: ${config.host || 'nicht gesetzt'}`,
           `Query Port: ${config.queryPort || 'nicht gesetzt'}`,
-          `Mods geladen: ${config.modIds.length}`
+          `Mods geladen: ${config.modIds.length}`,
+          `Channel ID: ${config.channelId || 'nicht gesetzt'}`
         ].join('\n'),
-        ephemeral: true
+        flags: MessageFlags.Ephemeral
       });
       return;
     }
 
     if (interaction.commandName === 'notifications') {
       const state = interaction.options.getString('state', true);
-
       notificationsEnabled = state === 'on';
 
       await interaction.reply({
         content: `Benachrichtigungen sind jetzt **${notificationsEnabled ? 'AN' : 'AUS'}**.`,
-        ephemeral: true
+        flags: MessageFlags.Ephemeral
+      });
+      return;
+    }
+
+    if (interaction.commandName === 'testupdate') {
+      if (!config.channelId) {
+        await interaction.reply({
+          content: 'ANNOUNCE_CHANNEL_ID ist nicht gesetzt. Trage zuerst den Zielchannel in Railway ein.',
+          flags: MessageFlags.Ephemeral
+        });
+        return;
+      }
+
+      const channel = await client.channels.fetch(config.channelId);
+
+      if (!channel || !channel.isTextBased()) {
+        await interaction.reply({
+          content: 'Der eingestellte Channel konnte nicht gefunden werden oder ist kein Textchannel.',
+          flags: MessageFlags.Ephemeral
+        });
+        return;
+      }
+
+      await channel.send({ embeds: [createTestEmbed()] });
+
+      await interaction.reply({
+        content: 'Test-Embed wurde erfolgreich gesendet.',
+        flags: MessageFlags.Ephemeral
       });
       return;
     }
@@ -103,12 +138,12 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.deferred || interaction.replied) {
       await interaction.followUp({
         content: 'Beim Ausführen des Commands ist ein Fehler passiert.',
-        ephemeral: true
+        flags: MessageFlags.Ephemeral
       });
     } else {
       await interaction.reply({
         content: 'Beim Ausführen des Commands ist ein Fehler passiert.',
-        ephemeral: true
+        flags: MessageFlags.Ephemeral
       });
     }
   }
