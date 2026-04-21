@@ -21,13 +21,14 @@ async function main() {
     await rest.put(
       Routes.applicationGuildCommands(clientId, guildId),
       {
-        body: commands.map((cmd) => cmd.toJSON()),
+        body: commands.map((cmd) => cmd.toJSON())
       }
     );
 
     console.log('✅ Slash-Commands erfolgreich registriert!');
   } catch (error) {
     console.error('❌ Fehler beim Registrieren:', error);
+    process.exit(1);
   }
 }
 
