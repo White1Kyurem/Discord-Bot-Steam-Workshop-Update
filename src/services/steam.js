@@ -1,18 +1,18 @@
-import fetch from "node-fetch";
+import fetch from 'node-fetch';
 
 export async function getWorkshopDetails(ids) {
   const body = new URLSearchParams();
-  body.append("itemcount", ids.length);
+  body.append('itemcount', ids.length);
 
   ids.forEach((id, i) => {
     body.append(`publishedfileids[${i}]`, id);
   });
 
   const res = await fetch(
-    "https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/",
+    'https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/',
     {
-      method: "POST",
-      body,
+      method: 'POST',
+      body
     }
   );
 
@@ -23,6 +23,6 @@ export async function getWorkshopDetails(ids) {
     title: mod.title,
     updated: mod.time_updated,
     preview: mod.preview_url,
-    url: `https://steamcommunity.com/sharedfiles/filedetails/?id=${mod.publishedfileid}`,
+    url: `https://steamcommunity.com/sharedfiles/filedetails/?id=${mod.publishedfileid}`
   }));
 }
