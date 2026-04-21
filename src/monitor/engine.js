@@ -1,12 +1,12 @@
-import { getWorkshopDetails } from "../services/steam.js";
-import { checkServer } from "../services/server.js";
+import { getWorkshopDetails } from '../services/steam.js';
+import { checkServer } from '../services/server.js';
+import { createModEmbed } from '../services/embed.js';
 
 let lastUpdates = {};
 let serverWasOffline = false;
 
 export async function runCheck(config, client) {
   const mods = await getWorkshopDetails(config.modIds);
-
   const serverOnline = await checkServer(config.host, config.queryPort);
 
   if (!serverOnline) {
@@ -23,11 +23,13 @@ export async function runCheck(config, client) {
     if (mod.updated > lastUpdates[mod.id]) {
       lastUpdates[mod.id] = mod.updated;
 
-      if (serverWasOffline) {
+      if (serverWasOffline && config.channelId) {
         serverWasOffline = false;
         const channel = await client.channels.fetch(config.channelId);
-        const { createModEmbed } = await import("../services/embed.js");
-        await channel.send({ embeds: [createModEmbed(mod)] });
+
+        if (channel && channel.isTextBased()) {
+          await channel.send({ embeds: [createModEmbed(mod)] });
+        }
       }
     }
   }
