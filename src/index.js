@@ -6,8 +6,9 @@ import {
   Routes,
   MessageFlags
 } from 'discord.js';
+
 import { commands } from './commands/commands.js';
-import { runCheck } from './monitor/engine.js';
+import { runCheck, getMonitorStatus } from './monitor/engine.js';
 import { createTestModEmbed } from './services/embed.js';
 
 const client = new Client({
@@ -19,7 +20,7 @@ const config = {
   port: Number(process.env.SERVER_PORT),
   queryPort: Number(process.env.SERVER_QUERY_PORT),
   modIds: process.env.WORKSHOP_MOD_IDS
-    ? process.env.WORKSHOP_MOD_IDS.split(',').map((id) => id.trim()).filter(Boolean)
+    ? process.env.WORKSHOP_MOD_IDS.split(',').map(id => id.trim()).filter(Boolean)
     : [],
   channelId: process.env.ANNOUNCE_CHANNEL_ID,
   pollInterval: Number(process.env.POLL_INTERVAL_SECONDS || 180) * 1000
@@ -33,34 +34,33 @@ async function registerCommands() {
   const guildId = process.env.DISCORD_GUILD_ID;
 
   if (!token || !clientId || !guildId) {
-    console.error('Fehlende ENV Variablen für Command-Registrierung.');
-    console.error('Benötigt: DISCORD_TOKEN, DISCORD_CLIENT_ID, DISCORD_GUILD_ID');
+    console.error('❌ Fehlende ENV Variablen für Command-Registrierung.');
     return;
   }
 
   const rest = new REST({ version: '10' }).setToken(token);
 
   try {
-    console.log('Registriere Slash-Commands...');
+    console.log('🔄 Registriere Slash-Commands...');
 
     await rest.put(
       Routes.applicationGuildCommands(clientId, guildId),
-      { body: commands.map((cmd) => cmd.toJSON()) }
+      { body: commands.map(cmd => cmd.toJSON()) }
     );
 
-    console.log('Slash-Commands erfolgreich registriert.');
+    console.log('✅ Slash-Commands erfolgreich registriert.');
   } catch (error) {
-    console.error('Fehler beim Registrieren der Slash-Commands:', error);
+    console.error('❌ Fehler beim Registrieren:', error);
   }
 }
 
 client.once('clientReady', async (readyClient) => {
-  console.log(`Bot is online as ${readyClient.user.tag}`);
+  console.log(`🟢 Bot ist online als ${readyClient.user.tag}`);
 
   await registerCommands();
 
   if (!config.host || !config.queryPort || config.modIds.length === 0) {
-    console.warn('Monitoring nicht gestartet: SERVER_HOST, SERVER_QUERY_PORT oder WORKSHOP_MOD_IDS fehlen.');
+    console.warn('⚠️ Monitoring nicht gestartet: Serverdaten oder Mods fehlen.');
     return;
   }
 
@@ -70,7 +70,7 @@ client.once('clientReady', async (readyClient) => {
     try {
       await runCheck(config, client);
     } catch (error) {
-      console.error('Fehler im Monitor:', error);
+      console.error('❌ Fehler im Monitor:', error);
     }
   }, config.pollInterval);
 });
@@ -79,36 +79,59 @@ client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
   try {
+    // =========================
+    // STATUS COMMAND
+    // =========================
     if (interaction.commandName === 'status') {
+      const monitor = getMonitorStatus();
+
+      const onlineTime = monitor.onlineSinceAfterPendingRestart
+        ? Math.floor((Date.now() - monitor.onlineSinceAfterPendingRestart) / 1000)
+        : 0;
+
       await interaction.reply({
         content: [
-          `Bot: online`,
-          `Notifications: ${notificationsEnabled ? 'an' : 'aus'}`,
-          `Server Host: ${config.host || 'nicht gesetzt'}`,
-          `Query Port: ${config.queryPort || 'nicht gesetzt'}`,
-          `Mods geladen: ${config.modIds.length}`,
-          `Channel ID: ${config.channelId || 'nicht gesetzt'}`
+          `🤖 Bot: online`,
+          `🔔 Notifications: ${notificationsEnabled ? 'an' : 'aus'}`,
+          `🌐 Server: ${config.host || 'nicht gesetzt'}`,
+          `📡 Query Port: ${config.queryPort || 'nicht gesetzt'}`,
+          `📦 Mods geladen: ${config.modIds.length}`,
+          `🕒 Pending Updates: ${monitor.pendingCount}`,
+          `🔁 Neuer Restart nötig: ${monitor.requiresOfflineCycleForPending ? 'ja' : 'nein'}`,
+          `🔻 Offline gesehen: ${monitor.offlineSeenAfterPending ? 'ja' : 'nein'}`,
+          `⏱ Online seit Restart: ${
+            monitor.onlineSinceAfterPendingRestart
+              ? `${onlineTime} Sekunden`
+              : 'noch nicht'
+          }`,
+          `📢 Channel: ${config.channelId || 'nicht gesetzt'}`
         ].join('\n'),
         flags: MessageFlags.Ephemeral
       });
       return;
     }
 
+    // =========================
+    // NOTIFICATIONS COMMAND
+    // =========================
     if (interaction.commandName === 'notifications') {
       const state = interaction.options.getString('state', true);
       notificationsEnabled = state === 'on';
 
       await interaction.reply({
-        content: `Benachrichtigungen sind jetzt **${notificationsEnabled ? 'AN' : 'AUS'}**.`,
+        content: `🔔 Benachrichtigungen sind jetzt **${notificationsEnabled ? 'AN' : 'AUS'}**.`,
         flags: MessageFlags.Ephemeral
       });
       return;
     }
 
+    // =========================
+    // TESTUPDATE COMMAND
+    // =========================
     if (interaction.commandName === 'testupdate') {
       if (!config.channelId) {
         await interaction.reply({
-          content: 'ANNOUNCE_CHANNEL_ID ist nicht gesetzt. Trage zuerst den Zielchannel in Railway ein.',
+          content: '❌ ANNOUNCE_CHANNEL_ID fehlt in Railway.',
           flags: MessageFlags.Ephemeral
         });
         return;
@@ -118,7 +141,7 @@ client.on('interactionCreate', async (interaction) => {
 
       if (!channel || !channel.isTextBased()) {
         await interaction.reply({
-          content: 'Der eingestellte Channel konnte nicht gefunden werden oder ist kein Textchannel.',
+          content: '❌ Channel nicht gefunden oder kein Textchannel.',
           flags: MessageFlags.Ephemeral
         });
         return;
@@ -127,30 +150,34 @@ client.on('interactionCreate', async (interaction) => {
       await channel.send({ embeds: [createTestModEmbed()] });
 
       await interaction.reply({
-        content: 'Test-Modupdate wurde erfolgreich gesendet.',
+        content: '🧪 Test-Modupdate erfolgreich gesendet.',
         flags: MessageFlags.Ephemeral
       });
       return;
     }
+
   } catch (error) {
-    console.error('Fehler bei interactionCreate:', error);
+    console.error('❌ Fehler bei Interaction:', error);
 
     if (interaction.deferred || interaction.replied) {
       await interaction.followUp({
-        content: 'Beim Ausführen des Commands ist ein Fehler passiert.',
+        content: '❌ Fehler beim Command.',
         flags: MessageFlags.Ephemeral
       });
     } else {
       await interaction.reply({
-        content: 'Beim Ausführen des Commands ist ein Fehler passiert.',
+        content: '❌ Fehler beim Command.',
         flags: MessageFlags.Ephemeral
       });
     }
   }
 });
 
+// =========================
+// START BOT
+// =========================
 if (!process.env.DISCORD_TOKEN) {
-  console.error('DISCORD_TOKEN fehlt.');
+  console.error('❌ DISCORD_TOKEN fehlt!');
   process.exit(1);
 }
 
