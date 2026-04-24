@@ -4,22 +4,22 @@ const EMBED_COLOR = '#4B0082';
 
 export function createModEmbed(mod) {
   return new EmbedBuilder()
-    .setTitle('📦 Mod Update installiert')
+    .setTitle('📦 Mod Update Installed')
     .setDescription(
       [
         `**${mod.title}**`,
         '',
-        'Die Mod wurde erkannt und ist jetzt auf deinem Server aktiv.'
+        'This mod update is now active on your server.'
       ].join('\n')
     )
     .setURL(mod.url)
     .setColor(EMBED_COLOR)
     .addFields(
       { name: 'Mod ID', value: `\`${mod.id}\``, inline: true },
-      { name: 'Status', value: 'Auf Server aktiv', inline: true },
+      { name: 'Status', value: 'Installed on server', inline: true },
       {
         name: 'Workshop',
-        value: mod.url ? `[Zur Steam Workshop Seite](${mod.url})` : 'Nicht verfügbar',
+        value: `[View on Steam Workshop](${mod.url})`,
         inline: false
       }
     )
@@ -33,6 +33,6 @@ export function createTestModEmbed() {
     id: '1559212036',
     title: 'Expansion Mod (Test)',
     url: 'https://steamcommunity.com/sharedfiles/filedetails/?id=1559212036',
-    preview: 'https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/221100/header.jpg',
+    preview: 'https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/221100/header.jpg'
   });
 }
