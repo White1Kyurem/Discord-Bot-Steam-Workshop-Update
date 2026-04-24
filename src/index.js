@@ -34,33 +34,33 @@ async function registerCommands() {
   const guildId = process.env.DISCORD_GUILD_ID;
 
   if (!token || !clientId || !guildId) {
-    console.error('❌ Fehlende ENV Variablen für Command-Registrierung.');
+    console.error('Missing ENV variables for command registration.');
     return;
   }
 
   const rest = new REST({ version: '10' }).setToken(token);
 
   try {
-    console.log('🔄 Registriere Slash-Commands...');
+    console.log('Registering slash commands...');
 
     await rest.put(
       Routes.applicationGuildCommands(clientId, guildId),
       { body: commands.map(cmd => cmd.toJSON()) }
     );
 
-    console.log('✅ Slash-Commands erfolgreich registriert.');
+    console.log('Slash commands registered successfully.');
   } catch (error) {
-    console.error('❌ Fehler beim Registrieren:', error);
+    console.error('Error registering commands:', error);
   }
 }
 
 client.once('clientReady', async (readyClient) => {
-  console.log(`🟢 Bot ist online als ${readyClient.user.tag}`);
+  console.log(`Bot is online as ${readyClient.user.tag}`);
 
   await registerCommands();
 
   if (!config.host || !config.queryPort || config.modIds.length === 0) {
-    console.warn('⚠️ Monitoring nicht gestartet: Serverdaten oder Mods fehlen.');
+    console.warn('Monitoring not started: missing server config or mods.');
     return;
   }
 
@@ -70,7 +70,7 @@ client.once('clientReady', async (readyClient) => {
     try {
       await runCheck(config, client);
     } catch (error) {
-      console.error('❌ Fehler im Monitor:', error);
+      console.error('Monitor error:', error);
     }
   }, config.pollInterval);
 });
@@ -80,7 +80,7 @@ client.on('interactionCreate', async (interaction) => {
 
   try {
     // =========================
-    // STATUS COMMAND
+    // STATUS
     // =========================
     if (interaction.commandName === 'status') {
       const monitor = getMonitorStatus();
@@ -92,19 +92,19 @@ client.on('interactionCreate', async (interaction) => {
       await interaction.reply({
         content: [
           `🤖 Bot: online`,
-          `🔔 Notifications: ${notificationsEnabled ? 'an' : 'aus'}`,
-          `🌐 Server: ${config.host || 'nicht gesetzt'}`,
-          `📡 Query Port: ${config.queryPort || 'nicht gesetzt'}`,
-          `📦 Mods geladen: ${config.modIds.length}`,
+          `🔔 Notifications: ${notificationsEnabled ? 'enabled' : 'disabled'}`,
+          `🌐 Server: ${config.host || 'not set'}`,
+          `📡 Query Port: ${config.queryPort || 'not set'}`,
+          `📦 Loaded Mods: ${config.modIds.length}`,
           `🕒 Pending Updates: ${monitor.pendingCount}`,
-          `🔁 Neuer Restart nötig: ${monitor.requiresOfflineCycleForPending ? 'ja' : 'nein'}`,
-          `🔻 Offline gesehen: ${monitor.offlineSeenAfterPending ? 'ja' : 'nein'}`,
-          `⏱ Online seit Restart: ${
+          `🔁 Restart Required: ${monitor.requiresOfflineCycleForPending ? 'yes' : 'no'}`,
+          `🔻 Offline detected: ${monitor.offlineSeenAfterPending ? 'yes' : 'no'}`,
+          `⏱ Online after restart: ${
             monitor.onlineSinceAfterPendingRestart
-              ? `${onlineTime} Sekunden`
-              : 'noch nicht'
+              ? `${onlineTime} seconds`
+              : 'not yet'
           }`,
-          `📢 Channel: ${config.channelId || 'nicht gesetzt'}`
+          `📢 Channel: ${config.channelId || 'not set'}`
         ].join('\n'),
         flags: MessageFlags.Ephemeral
       });
@@ -112,26 +112,26 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     // =========================
-    // NOTIFICATIONS COMMAND
+    // NOTIFICATIONS
     // =========================
     if (interaction.commandName === 'notifications') {
       const state = interaction.options.getString('state', true);
       notificationsEnabled = state === 'on';
 
       await interaction.reply({
-        content: `🔔 Benachrichtigungen sind jetzt **${notificationsEnabled ? 'AN' : 'AUS'}**.`,
+        content: `Notifications are now **${notificationsEnabled ? 'ENABLED' : 'DISABLED'}**.`,
         flags: MessageFlags.Ephemeral
       });
       return;
     }
 
     // =========================
-    // TESTUPDATE COMMAND
+    // TEST UPDATE
     // =========================
     if (interaction.commandName === 'testupdate') {
       if (!config.channelId) {
         await interaction.reply({
-          content: '❌ ANNOUNCE_CHANNEL_ID fehlt in Railway.',
+          content: 'ANNOUNCE_CHANNEL_ID is not set.',
           flags: MessageFlags.Ephemeral
         });
         return;
@@ -141,7 +141,7 @@ client.on('interactionCreate', async (interaction) => {
 
       if (!channel || !channel.isTextBased()) {
         await interaction.reply({
-          content: '❌ Channel nicht gefunden oder kein Textchannel.',
+          content: 'Channel not found or not a text channel.',
           flags: MessageFlags.Ephemeral
         });
         return;
@@ -150,34 +150,24 @@ client.on('interactionCreate', async (interaction) => {
       await channel.send({ embeds: [createTestModEmbed()] });
 
       await interaction.reply({
-        content: '🧪 Test-Modupdate erfolgreich gesendet.',
+        content: 'Test update sent successfully.',
         flags: MessageFlags.Ephemeral
       });
       return;
     }
 
   } catch (error) {
-    console.error('❌ Fehler bei Interaction:', error);
+    console.error('Interaction error:', error);
 
-    if (interaction.deferred || interaction.replied) {
-      await interaction.followUp({
-        content: '❌ Fehler beim Command.',
-        flags: MessageFlags.Ephemeral
-      });
-    } else {
-      await interaction.reply({
-        content: '❌ Fehler beim Command.',
-        flags: MessageFlags.Ephemeral
-      });
-    }
+    await interaction.reply({
+      content: 'An error occurred while executing this command.',
+      flags: MessageFlags.Ephemeral
+    });
   }
 });
 
-// =========================
-// START BOT
-// =========================
 if (!process.env.DISCORD_TOKEN) {
-  console.error('❌ DISCORD_TOKEN fehlt!');
+  console.error('DISCORD_TOKEN is missing.');
   process.exit(1);
 }
 
