@@ -3,11 +3,11 @@ import { SlashCommandBuilder } from 'discord.js';
 export const commands = [
   new SlashCommandBuilder()
     .setName('notifications')
-    .setDescription('Benachrichtigungen ein- oder ausschalten')
+    .setDescription('Enable or disable update notifications')
     .addStringOption((option) =>
       option
         .setName('state')
-        .setDescription('on oder off')
+        .setDescription('Choose on or off')
         .setRequired(true)
         .addChoices(
           { name: 'on', value: 'on' },
@@ -17,9 +17,9 @@ export const commands = [
 
   new SlashCommandBuilder()
     .setName('status')
-    .setDescription('Zeigt den aktuellen Bot-Status an'),
+    .setDescription('Show bot and server status'),
 
   new SlashCommandBuilder()
     .setName('testupdate')
-    .setDescription('Sendet ein Test-Embed in den eingestellten Ankündigungs-Channel')
+    .setDescription('Send a test mod update embed')
 ];
