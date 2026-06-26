@@ -21,16 +21,5 @@ export const commands = [
 
   new SlashCommandBuilder()
     .setName('testupdate')
-    .setDescription('Send a test mod notification')
-    .addStringOption((option) =>
-      option
-        .setName('type')
-        .setDescription('Choose which notification should be tested')
-        .setRequired(false)
-        .addChoices(
-          { name: 'Mod update', value: 'updated' },
-          { name: 'New mod installed', value: 'installed' },
-          { name: 'Mod uninstalled', value: 'uninstalled' }
-        )
-    )
+    .setDescription('Send a test mod update embed')
 ];
