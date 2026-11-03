@@ -10,6 +10,7 @@ import {
 import { commands } from './commands/commands.js';
 import { runCheck, getMonitorStatus } from './monitor/engine.js';
 import { createTestModEmbed } from './services/embed.js';
+import { getInstalledWorkshopState } from './services/server-workshop.js';
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds]
@@ -165,6 +166,33 @@ client.on('interactionCreate', async (interaction) => {
         content: `Notifications are now **${notificationsEnabled ? 'ENABLED' : 'DISABLED'}**.`,
         flags: MessageFlags.Ephemeral
       });
+      return;
+    }
+
+    // =========================
+    // SFTP MANIFEST TEST
+    // =========================
+    if (interaction.commandName === 'checkmanifest') {
+      await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+      try {
+        const installedState = await getInstalledWorkshopState(config.sftp);
+
+        await interaction.editReply({
+          content: [
+            '✅ Server Workshop manifest verification succeeded.',
+            `📄 Path: \`${installedState.path}\``,
+            `📦 Installed Workshop items found: **${installedState.items.size}**`
+          ].join('\n')
+        });
+      } catch (error) {
+        await interaction.editReply({
+          content:
+            '❌ Server Workshop manifest verification failed.\n' +
+            `\`${String(error?.message || error).slice(0, 1500)}\``
+        });
+      }
+
       return;
     }
 
