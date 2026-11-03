@@ -35,7 +35,12 @@ const config = {
     workshopAcfPath:
       process.env.SERVER_WORKSHOP_ACF_PATH ||
       'steamapps/workshop/appworkshop_221100.acf',
-    readyTimeout: Number(process.env.SFTP_READY_TIMEOUT_MS || 20000)
+    readyTimeout: Number(process.env.SFTP_READY_TIMEOUT_MS || 20000),
+    searchRoot: process.env.SERVER_SFTP_SEARCH_ROOT || '.',
+    searchDepth: Number(process.env.SERVER_SFTP_SEARCH_DEPTH || 6),
+    searchMaxDirectories: Number(
+      process.env.SERVER_SFTP_SEARCH_MAX_DIRECTORIES || 300
+    )
   }
 };
 
