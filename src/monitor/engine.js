@@ -68,7 +68,9 @@ async function loadState(config) {
         onlineSince: pending.onlineSince
           ? safeNumber(pending.onlineSince)
           : null,
-        installedAtOnline: Boolean(pending.installedAtOnline)
+        installedAtOnline: Boolean(pending.installedAtOnline),
+        installedSource: String(pending.installedSource || ''),
+        installedUpdated: safeNumber(pending.installedUpdated)
       });
     }
 
@@ -145,21 +147,29 @@ async function captureInstalledVersionsAtServerStart(config, now) {
 
     for (const pending of eligible) {
       const installed = installedState.items.get(String(pending.id));
-      const verified = matchesInstalledVersion(pending, installed);
+      const verified = matchesInstalledVersion(
+        pending,
+        installed,
+        config.sftp.metaTimestampToleranceSeconds
+      );
 
       if (verified) {
         pending.installedAtOnline = true;
         pending.onlineSince = now;
         pending.installedManifest = String(installed?.manifest || '');
+        pending.installedSource = String(installed?.source || 'unknown');
+        pending.installedUpdated = safeNumber(installed?.updated);
 
         console.log(
-          `[VERIFIED] ${pending.title} (${pending.id}) was installed before the server came online.`
+          `[VERIFIED] ${pending.title} (${pending.id}) was installed before the server came online (${pending.installedSource}).`
         );
       } else {
         pending.offlineSeen = false;
         pending.installedAtOnline = false;
         pending.onlineSince = null;
         pending.installedManifest = String(installed?.manifest || '');
+        pending.installedSource = String(installed?.source || 'missing');
+        pending.installedUpdated = safeNumber(installed?.updated);
 
         console.log(
           `[WAITING] ${pending.title} (${pending.id}) did not match the installed server manifest at startup. Waiting for the next offline cycle.`
@@ -253,7 +263,9 @@ export async function runCheck(config, client) {
       offlineSeen: false,
       onlineSince: null,
       installedAtOnline: false,
-      installedManifest: ''
+      installedManifest: '',
+      installedSource: '',
+      installedUpdated: 0
     });
 
     console.log(
