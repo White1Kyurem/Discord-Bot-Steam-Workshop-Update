@@ -4,6 +4,10 @@ function safeString(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+const DOTNET_TICKS_AT_UNIX_EPOCH = 621355968000000000n;
+const DOTNET_TICKS_PER_SECOND = 10000000n;
+const DOTNET_TICKS_MASK = (1n << 62n) - 1n;
+
 function decodeVdfString(token) {
   return token
     .slice(1, -1)
@@ -72,25 +76,96 @@ export function getInstalledItemsFromVdf(input) {
 
     items.set(String(modId), {
       manifest: safeString(details.manifest),
-      updated: Number(details.timeupdated || 0)
+      updated: Number(details.timeupdated || 0),
+      source: 'acf'
     });
   }
 
   return items;
 }
 
-export function matchesInstalledVersion(workshopMod, installedMod) {
+export function decodeMetaTimestamp(value) {
+  const raw = safeString(String(value ?? ''));
+  if (!/^-?\d+$/.test(raw)) return 0;
+
+  let encoded;
+  try {
+    encoded = BigInt(raw);
+  } catch {
+    return 0;
+  }
+
+  let unixSeconds;
+
+  if (encoded > 0n && encoded < (1n << 40n)) {
+    unixSeconds = encoded;
+  } else {
+    const ticks = BigInt.asUintN(64, encoded) & DOTNET_TICKS_MASK;
+    if (ticks < DOTNET_TICKS_AT_UNIX_EPOCH) return 0;
+    unixSeconds =
+      (ticks - DOTNET_TICKS_AT_UNIX_EPOCH) / DOTNET_TICKS_PER_SECOND;
+  }
+
+  const numeric = Number(unixSeconds);
+  if (!Number.isSafeInteger(numeric) || numeric <= 0) return 0;
+
+  const year = new Date(numeric * 1000).getUTCFullYear();
+  if (year < 2000 || year > 2200) return 0;
+
+  return numeric;
+}
+
+export function parseMetaCpp(input) {
+  const text = String(input || '').replace(/^\uFEFF/, '');
+  const publishedId = text.match(
+    /\bpublishedid\s*=\s*"?(\d+)"?\s*;/i
+  )?.[1];
+  const timestamp = text.match(
+    /\btimestamp\s*=\s*"?(-?\d+)"?\s*;/i
+  )?.[1];
+  const name = text.match(/\bname\s*=\s*"([^"]*)"\s*;/i)?.[1] || '';
+
+  if (!publishedId) return null;
+
+  return {
+    id: publishedId,
+    name,
+    timestamp: timestamp || '',
+    updated: decodeMetaTimestamp(timestamp || '')
+  };
+}
+
+export function matchesInstalledVersion(
+  workshopMod,
+  installedMod,
+  metaTimestampToleranceSeconds = 0
+) {
   if (!installedMod) return false;
 
   const expectedManifest = safeString(workshopMod?.manifest);
   const installedManifest = safeString(installedMod?.manifest);
 
-  if (expectedManifest) {
-    return Boolean(installedManifest) && installedManifest === expectedManifest;
+  if (expectedManifest && installedManifest) {
+    return installedManifest === expectedManifest;
   }
 
   const expectedUpdated = Number(workshopMod?.updated || 0);
   const installedUpdated = Number(installedMod?.updated || 0);
+
+  if (
+    installedMod.source === 'meta' &&
+    Number.isFinite(expectedUpdated) &&
+    expectedUpdated > 0 &&
+    Number.isFinite(installedUpdated) &&
+    installedUpdated > 0
+  ) {
+    const configuredTolerance = Number(metaTimestampToleranceSeconds || 0);
+    const tolerance = Number.isFinite(configuredTolerance)
+      ? Math.max(0, configuredTolerance)
+      : 0;
+
+    return Math.abs(installedUpdated - expectedUpdated) <= tolerance;
+  }
 
   return (
     Number.isFinite(expectedUpdated) &&
@@ -114,6 +189,129 @@ function joinRemotePath(parent, child) {
   if (!normalizedParent || normalizedParent === '.') return child;
   if (normalizedParent === '/') return `/${child}`;
   return `${normalizedParent}/${child}`;
+}
+
+function getParentRemotePath(remotePath) {
+  const normalized = safeString(remotePath).replace(/\/+$/, '');
+  const separator = normalized.lastIndexOf('/');
+
+  if (separator < 0) return '.';
+  if (separator === 0) return '/';
+  return normalized.slice(0, separator);
+}
+
+function inferGameRoot(manifestPath, configuredGameRoot) {
+  const override = safeString(configuredGameRoot);
+  if (override) return override;
+
+  const normalized = safeString(manifestPath).replace(/\\/g, '/');
+  const marker = '/steamapps/workshop/appworkshop_221100.acf';
+  const lower = normalized.toLowerCase();
+  const markerIndex = lower.lastIndexOf(marker);
+
+  if (markerIndex >= 0) {
+    return normalized.slice(0, markerIndex) || '/';
+  }
+
+  if (lower === 'steamapps/workshop/appworkshop_221100.acf') {
+    return '.';
+  }
+
+  return getParentRemotePath(manifestPath);
+}
+
+async function getInstalledItemsFromModFolders(sftp, gameRoot) {
+  const items = new Map();
+  const errors = [];
+  let foldersScanned = 0;
+  let entries;
+
+  try {
+    entries = await sftp.list(gameRoot);
+  } catch (error) {
+    return {
+      items,
+      foldersScanned,
+      error: `Could not list game root "${gameRoot}": ${
+        error?.message || error
+      }`
+    };
+  }
+
+  const modFolders = entries.filter((entry) => {
+    const name = safeString(entry?.name);
+    return name.startsWith('@') && entry?.type !== '-';
+  });
+
+  for (const entry of modFolders) {
+    const folder = safeString(entry.name);
+    const metaPath = joinRemotePath(joinRemotePath(gameRoot, folder), 'meta.cpp');
+    foldersScanned += 1;
+
+    try {
+      const contents = await sftp.get(metaPath);
+      const text = Buffer.isBuffer(contents)
+        ? contents.toString('utf8')
+        : String(contents);
+      const meta = parseMetaCpp(text);
+
+      if (!meta) {
+        errors.push(`${folder}: publishedid missing`);
+        continue;
+      }
+
+      if (!meta.updated) {
+        errors.push(`${folder}: valid timestamp missing`);
+        continue;
+      }
+
+      items.set(meta.id, {
+        manifest: '',
+        updated: meta.updated,
+        source: 'meta',
+        folder,
+        name: meta.name,
+        metaTimestamp: meta.timestamp
+      });
+    } catch (error) {
+      errors.push(`${folder}: ${error?.message || error}`);
+    }
+  }
+
+  return {
+    items,
+    foldersScanned,
+    error: errors.length
+      ? `${errors.length} mod folder(s) had no readable, valid meta.cpp.`
+      : ''
+  };
+}
+
+async function readInstalledWorkshopState(sftp, manifestPath, config) {
+  const contents = await sftp.get(manifestPath);
+  const text = Buffer.isBuffer(contents)
+    ? contents.toString('utf8')
+    : String(contents);
+  const acfItems = getInstalledItemsFromVdf(text);
+  const gameRoot = inferGameRoot(manifestPath, config?.gameRoot);
+  const metaState = await getInstalledItemsFromModFolders(sftp, gameRoot);
+  const items = new Map(metaState.items);
+
+  // The ACF contains exact Steam manifest IDs, so it always wins when both
+  // sources contain the same Workshop item.
+  for (const [modId, item] of acfItems) {
+    items.set(modId, item);
+  }
+
+  return {
+    path: manifestPath,
+    gameRoot,
+    items,
+    acfItems,
+    metaItems: metaState.items,
+    modFoldersScanned: metaState.foldersScanned,
+    metaScanError: metaState.error
+  };
 }
 
 function shouldSkipDirectory(name) {
@@ -233,15 +431,7 @@ export async function getInstalledWorkshopState(config = {}) {
 
     for (const remotePath of candidates) {
       try {
-        const contents = await sftp.get(remotePath);
-        const text = Buffer.isBuffer(contents)
-          ? contents.toString('utf8')
-          : String(contents);
-
-        return {
-          path: remotePath,
-          items: getInstalledItemsFromVdf(text)
-        };
+        return await readInstalledWorkshopState(sftp, remotePath, config);
       } catch (error) {
         failures.push(`${remotePath}: ${error?.message || error}`);
       }
@@ -250,15 +440,7 @@ export async function getInstalledWorkshopState(config = {}) {
     const discovery = await findManifestPath(sftp, config);
 
     if (discovery.path) {
-      const contents = await sftp.get(discovery.path);
-      const text = Buffer.isBuffer(contents)
-        ? contents.toString('utf8')
-        : String(contents);
-
-      return {
-        path: discovery.path,
-        items: getInstalledItemsFromVdf(text)
-      };
+      return await readInstalledWorkshopState(sftp, discovery.path, config);
     }
 
     const visibleRoot = discovery.rootEntries.length
