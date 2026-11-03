@@ -4,6 +4,7 @@ import path from 'node:path';
 import { getWorkshopDetails } from '../services/steam.js';
 import { checkServer } from '../services/server.js';
 import {
+  getInstalledVersionKey,
   getInstalledWorkshopState,
   matchesInstalledVersion
 } from '../services/server-workshop.js';
@@ -12,6 +13,7 @@ import { createModEmbed } from '../services/embed.js';
 const STATE_FILE_NAME = 'steam-update-monitor-state.json';
 const lastKnownWorkshopVersions = new Map();
 const pendingUpdates = new Map();
+const installedVersionSnapshot = new Map();
 
 let stateLoaded = false;
 let loadedStatePath = '';
@@ -19,6 +21,8 @@ let previousServerOnline = null;
 let lastVerificationAt = null;
 let lastVerificationError = '';
 let lastManifestPath = '';
+let lastInstalledSnapshotAt = null;
+let lastInstalledSnapshotError = '';
 
 function safeNumber(value, fallback = 0) {
   const parsed = Number(value);
@@ -42,10 +46,13 @@ async function loadState(config) {
 
   lastKnownWorkshopVersions.clear();
   pendingUpdates.clear();
+  installedVersionSnapshot.clear();
   previousServerOnline = null;
   lastVerificationAt = null;
   lastVerificationError = '';
   lastManifestPath = '';
+  lastInstalledSnapshotAt = null;
+  lastInstalledSnapshotError = '';
 
   try {
     const raw = await fs.readFile(stateFile, 'utf8');
@@ -69,9 +76,21 @@ async function loadState(config) {
           ? safeNumber(pending.onlineSince)
           : null,
         installedAtOnline: Boolean(pending.installedAtOnline),
+        baselineInstalledVersion: String(
+          pending.baselineInstalledVersion || ''
+        ),
         installedSource: String(pending.installedSource || ''),
         installedUpdated: safeNumber(pending.installedUpdated)
       });
+    }
+
+    for (const [modId, version] of Object.entries(
+      parsed.installedSnapshot || {}
+    )) {
+      const normalized = String(version || '');
+      if (normalized) {
+        installedVersionSnapshot.set(String(modId), normalized);
+      }
     }
 
     previousServerOnline =
@@ -81,6 +100,10 @@ async function loadState(config) {
     lastVerificationAt = parsed.lastVerificationAt || null;
     lastVerificationError = String(parsed.lastVerificationError || '');
     lastManifestPath = String(parsed.lastManifestPath || '');
+    lastInstalledSnapshotAt = parsed.lastInstalledSnapshotAt || null;
+    lastInstalledSnapshotError = String(
+      parsed.lastInstalledSnapshotError || ''
+    );
   } catch (error) {
     if (error?.code !== 'ENOENT') {
       console.error('[STATE] Failed to load monitor state:', error);
@@ -97,14 +120,17 @@ async function saveState(config) {
   const temporaryFile = `${stateFile}.tmp`;
 
   const payload = {
-    version: 2,
+    version: 3,
     savedAt: new Date().toISOString(),
     previousServerOnline,
     lastVerificationAt,
     lastVerificationError,
     lastManifestPath,
+    lastInstalledSnapshotAt,
+    lastInstalledSnapshotError,
     lastKnown: Object.fromEntries(lastKnownWorkshopVersions),
-    pending: Object.fromEntries(pendingUpdates)
+    pending: Object.fromEntries(pendingUpdates),
+    installedSnapshot: Object.fromEntries(installedVersionSnapshot)
   };
 
   await fs.mkdir(stateDir, { recursive: true });
@@ -128,29 +154,93 @@ export function getMonitorStatus() {
     ),
     lastVerificationAt,
     lastVerificationError,
-    lastManifestPath
+    lastManifestPath,
+    installedSnapshotCount: installedVersionSnapshot.size,
+    lastInstalledSnapshotAt,
+    lastInstalledSnapshotError
   };
 }
 
-async function captureInstalledVersionsAtServerStart(config, now) {
+function hasSftpConfig(config) {
+  return Boolean(
+    config?.sftp?.host &&
+      config?.sftp?.username &&
+      config?.sftp?.password
+  );
+}
+
+async function readInstalledState(config, now) {
+  if (!hasSftpConfig(config)) return null;
+
+  try {
+    const installedState = await getInstalledWorkshopState(config.sftp);
+    lastInstalledSnapshotAt = new Date(now).toISOString();
+    lastInstalledSnapshotError = '';
+    lastManifestPath = installedState.path;
+    return installedState;
+  } catch (error) {
+    lastInstalledSnapshotAt = new Date(now).toISOString();
+    lastInstalledSnapshotError = (error?.message || String(error)).slice(
+      0,
+      700
+    );
+    console.error('[SNAPSHOT] Could not read installed mod versions:', error);
+    return null;
+  }
+}
+
+function updateInstalledSnapshot(installedState) {
+  if (!installedState) return;
+
+  installedVersionSnapshot.clear();
+
+  for (const [modId, installed] of installedState.items) {
+    const version = getInstalledVersionKey(installed);
+    if (version) installedVersionSnapshot.set(String(modId), version);
+  }
+}
+
+function fillMissingPendingBaselines(installedState) {
+  if (!installedState) return;
+
+  for (const pending of pendingUpdates.values()) {
+    if (pending.baselineInstalledVersion || pending.offlineSeen) continue;
+
+    const installed = installedState.items.get(String(pending.id));
+    const version = getInstalledVersionKey(installed);
+    if (version) pending.baselineInstalledVersion = version;
+  }
+}
+
+async function captureInstalledVersionsAtServerStart(
+  now,
+  installedState = null
+) {
   const eligible = [...pendingUpdates.values()].filter(
     (pending) => pending.offlineSeen
   );
 
-  if (!eligible.length) return;
+  if (!eligible.length) return installedState;
 
   try {
-    const installedState = await getInstalledWorkshopState(config.sftp);
+    if (!installedState) {
+      throw new Error(
+        lastInstalledSnapshotError ||
+          'No readable installed-mod snapshot was available at server start.'
+      );
+    }
+
+    const verifiedState = installedState;
     lastVerificationAt = new Date(now).toISOString();
     lastVerificationError = '';
-    lastManifestPath = installedState.path;
+    lastManifestPath = verifiedState.path;
 
     for (const pending of eligible) {
-      const installed = installedState.items.get(String(pending.id));
+      const installed = verifiedState.items.get(String(pending.id));
       const verified = matchesInstalledVersion(
         pending,
         installed,
-        config.sftp.metaTimestampToleranceSeconds
+        pending.baselineInstalledVersion
       );
 
       if (verified) {
@@ -172,10 +262,12 @@ async function captureInstalledVersionsAtServerStart(config, now) {
         pending.installedUpdated = safeNumber(installed?.updated);
 
         console.log(
-          `[WAITING] ${pending.title} (${pending.id}) did not match the installed server manifest at startup. Waiting for the next offline cycle.`
+          `[WAITING] ${pending.title} (${pending.id}) did not have a newer verified server version at startup. Waiting for the next offline cycle.`
         );
       }
     }
+
+    return verifiedState;
   } catch (error) {
     lastVerificationAt = new Date(now).toISOString();
     lastVerificationError = (error?.message || String(error)).slice(0, 700);
@@ -193,6 +285,8 @@ async function captureInstalledVersionsAtServerStart(config, now) {
       '[VERIFY] Could not confirm installed Workshop manifests. No update will be announced:',
       error
     );
+
+    return null;
   }
 }
 
@@ -238,9 +332,14 @@ async function announceVerifiedUpdates(config, client, now) {
 export async function runCheck(config, client) {
   await loadState(config);
 
-  const mods = await getWorkshopDetails(config.modIds);
-  const serverOnline = await checkServer(config.host, config.queryPort);
   const now = Date.now();
+  const [mods, serverOnline] = await Promise.all([
+    getWorkshopDetails(config.modIds),
+    checkServer(config.host, config.queryPort)
+  ]);
+  let installedState = serverOnline
+    ? await readInstalledState(config, now)
+    : null;
 
   for (const mod of mods) {
     const modId = String(mod.id);
@@ -264,6 +363,8 @@ export async function runCheck(config, client) {
       onlineSince: null,
       installedAtOnline: false,
       installedManifest: '',
+      baselineInstalledVersion:
+        installedVersionSnapshot.get(modId) || '',
       installedSource: '',
       installedUpdated: 0
     });
@@ -295,9 +396,14 @@ export async function runCheck(config, client) {
 
   if (previousServerOnline === false) {
     console.log('[SERVER] Server is online again. Verifying installed manifests.');
-    await captureInstalledVersionsAtServerStart(config, now);
+    installedState = await captureInstalledVersionsAtServerStart(
+      now,
+      installedState
+    );
   }
 
+  fillMissingPendingBaselines(installedState);
+  updateInstalledSnapshot(installedState);
   previousServerOnline = true;
   await announceVerifiedUpdates(config, client, now);
   await saveState(config);
