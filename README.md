@@ -13,6 +13,7 @@
 - Slash commands:
   - /notifications on|off
   - /status
+  - /checkmanifest
 
 ## Setup
 1. Upload to GitHub
@@ -39,6 +40,10 @@ The password must remain a Railway secret and must never be committed to GitHub.
 If the host exposes the manifest under another path, change
 `SERVER_WORKSHOP_ACF_PATH`. The `/status` command shows the last successful
 manifest path or the exact verification error.
+
+After deploying, run `/checkmanifest` once. It tests the SFTP login, locates
+the ACF file and reports how many installed Workshop items were found without
+waiting for a real update.
 
 ## Start
 npm install

@@ -1,4 +1,7 @@
-import { SlashCommandBuilder } from 'discord.js';
+import {
+  PermissionFlagsBits,
+  SlashCommandBuilder
+} from 'discord.js';
 
 export const commands = [
   new SlashCommandBuilder()
@@ -20,6 +23,12 @@ export const commands = [
     .setDescription('Show bot and server status'),
 
   new SlashCommandBuilder()
+    .setName('checkmanifest')
+    .setDescription('Test the server-side Workshop manifest verification')
+    .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+
+  new SlashCommandBuilder()
     .setName('testupdate')
     .setDescription('Send a test mod update embed')
 ];
+
