@@ -135,10 +135,37 @@ export function parseMetaCpp(input) {
   };
 }
 
+export function getInstalledVersionKey(installedMod) {
+  const manifest = safeString(installedMod?.manifest);
+  if (manifest) return `manifest:${manifest}`;
+
+  const metaTimestamp = safeString(installedMod?.metaTimestamp);
+  if (metaTimestamp) return `meta:${metaTimestamp}`;
+
+  const updated = Number(installedMod?.updated || 0);
+  if (Number.isFinite(updated) && updated > 0) {
+    return `updated:${updated}`;
+  }
+
+  return '';
+}
+
+function getMetaTicksFromVersionKey(versionKey) {
+  const raw = safeString(versionKey);
+  if (!raw.startsWith('meta:')) return null;
+
+  try {
+    const encoded = BigInt(raw.slice('meta:'.length));
+    return BigInt.asUintN(64, encoded) & DOTNET_TICKS_MASK;
+  } catch {
+    return null;
+  }
+}
+
 export function matchesInstalledVersion(
   workshopMod,
   installedMod,
-  metaTimestampToleranceSeconds = 0
+  baselineInstalledVersion = ''
 ) {
   if (!installedMod) return false;
 
@@ -149,30 +176,22 @@ export function matchesInstalledVersion(
     return installedManifest === expectedManifest;
   }
 
-  const expectedUpdated = Number(workshopMod?.updated || 0);
-  const installedUpdated = Number(installedMod?.updated || 0);
+  if (installedMod.source === 'meta') {
+    const baselineTicks = getMetaTicksFromVersionKey(
+      baselineInstalledVersion
+    );
+    const installedTicks = getMetaTicksFromVersionKey(
+      getInstalledVersionKey(installedMod)
+    );
 
-  if (
-    installedMod.source === 'meta' &&
-    Number.isFinite(expectedUpdated) &&
-    expectedUpdated > 0 &&
-    Number.isFinite(installedUpdated) &&
-    installedUpdated > 0
-  ) {
-    const configuredTolerance = Number(metaTimestampToleranceSeconds || 0);
-    const tolerance = Number.isFinite(configuredTolerance)
-      ? Math.max(0, configuredTolerance)
-      : 0;
-
-    return Math.abs(installedUpdated - expectedUpdated) <= tolerance;
+    return (
+      baselineTicks !== null &&
+      installedTicks !== null &&
+      installedTicks > baselineTicks
+    );
   }
 
-  return (
-    Number.isFinite(expectedUpdated) &&
-    expectedUpdated > 0 &&
-    Number.isFinite(installedUpdated) &&
-    installedUpdated >= expectedUpdated
-  );
+  return false;
 }
 
 function buildManifestCandidates(config) {
