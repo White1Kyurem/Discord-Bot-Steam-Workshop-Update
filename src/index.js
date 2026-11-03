@@ -23,10 +23,46 @@ const config = {
     ? process.env.WORKSHOP_MOD_IDS.split(',').map(id => id.trim()).filter(Boolean)
     : [],
   channelId: process.env.ANNOUNCE_CHANNEL_ID,
-  pollInterval: Number(process.env.POLL_INTERVAL_SECONDS || 180) * 1000
+  pollInterval: Number(process.env.POLL_INTERVAL_SECONDS || 180) * 1000,
+  onlineStableMs: Number(process.env.ONLINE_STABLE_SECONDS || 90) * 1000,
+  dataDir: process.env.DATA_DIR || './data',
+  sftp: {
+    host: process.env.SERVER_SFTP_HOST || process.env.SERVER_HOST,
+    port: Number(process.env.SERVER_SFTP_PORT || 8822),
+    username: process.env.SERVER_SFTP_USERNAME,
+    password: process.env.SERVER_SFTP_PASSWORD,
+    workshopAcfPath:
+      process.env.SERVER_WORKSHOP_ACF_PATH ||
+      'steamapps/workshop/appworkshop_221100.acf',
+    readyTimeout: Number(process.env.SFTP_READY_TIMEOUT_MS || 20000)
+  }
 };
 
 let notificationsEnabled = true;
+let checkInProgress = false;
+
+async function runMonitorCheck() {
+  if (checkInProgress) {
+    console.warn('Skipping monitor check because the previous check is still running.');
+    return;
+  }
+
+  checkInProgress = true;
+
+  try {
+    await runCheck(
+      {
+        ...config,
+        notificationsEnabled
+      },
+      client
+    );
+  } catch (error) {
+    console.error('Monitor error:', error);
+  } finally {
+    checkInProgress = false;
+  }
+}
 
 async function registerCommands() {
   const token = process.env.DISCORD_TOKEN;
@@ -64,15 +100,18 @@ client.once('clientReady', async (readyClient) => {
     return;
   }
 
-  setInterval(async () => {
-    if (!notificationsEnabled) return;
+  if (
+    !config.sftp.host ||
+    !config.sftp.username ||
+    !config.sftp.password
+  ) {
+    console.warn(
+      'SFTP install verification is not configured. Updates will be detected, but never announced until the SFTP variables are set.'
+    );
+  }
 
-    try {
-      await runCheck(config, client);
-    } catch (error) {
-      console.error('Monitor error:', error);
-    }
-  }, config.pollInterval);
+  await runMonitorCheck();
+  setInterval(runMonitorCheck, config.pollInterval);
 });
 
 client.on('interactionCreate', async (interaction) => {
@@ -85,10 +124,6 @@ client.on('interactionCreate', async (interaction) => {
     if (interaction.commandName === 'status') {
       const monitor = getMonitorStatus();
 
-      const onlineTime = monitor.onlineSinceAfterPendingRestart
-        ? Math.floor((Date.now() - monitor.onlineSinceAfterPendingRestart) / 1000)
-        : 0;
-
       await interaction.reply({
         content: [
           `🤖 Bot: online`,
@@ -97,13 +132,21 @@ client.on('interactionCreate', async (interaction) => {
           `📡 Query Port: ${config.queryPort || 'not set'}`,
           `📦 Loaded Mods: ${config.modIds.length}`,
           `🕒 Pending Updates: ${monitor.pendingCount}`,
-          `🔁 Restart Required: ${monitor.requiresOfflineCycleForPending ? 'yes' : 'no'}`,
-          `🔻 Offline detected: ${monitor.offlineSeenAfterPending ? 'yes' : 'no'}`,
-          `⏱ Online after restart: ${
-            monitor.onlineSinceAfterPendingRestart
-              ? `${onlineTime} seconds`
-              : 'not yet'
+          `🔁 Waiting for offline cycle: ${monitor.awaitingOfflineCount}`,
+          `🔻 Offline cycle detected: ${monitor.offlineSeenCount}`,
+          `✅ Installed before server start: ${monitor.verifiedAtOnlineCount}`,
+          `🔐 SFTP verification: ${
+            config.sftp.username && config.sftp.password
+              ? 'configured'
+              : 'not configured'
           }`,
+          `📄 Manifest path: ${
+            monitor.lastManifestPath ||
+            config.sftp.workshopAcfPath ||
+            'not found yet'
+          }`,
+          `🧾 Last verification: ${monitor.lastVerificationAt || 'not yet'}`,
+          `⚠️ Verification error: ${monitor.lastVerificationError || 'none'}`,
           `📢 Channel: ${config.channelId || 'not set'}`
         ].join('\n'),
         flags: MessageFlags.Ephemeral
@@ -172,3 +215,4 @@ if (!process.env.DISCORD_TOKEN) {
 }
 
 client.login(process.env.DISCORD_TOKEN);
+
