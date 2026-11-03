@@ -10,7 +10,11 @@ import {
 import { commands } from './commands/commands.js';
 import { runCheck, getMonitorStatus } from './monitor/engine.js';
 import { createTestModEmbed } from './services/embed.js';
-import { getInstalledWorkshopState } from './services/server-workshop.js';
+import { getWorkshopDetails } from './services/steam.js';
+import {
+  getInstalledWorkshopState,
+  matchesInstalledVersion
+} from './services/server-workshop.js';
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds]
@@ -35,6 +39,10 @@ const config = {
     workshopAcfPath:
       process.env.SERVER_WORKSHOP_ACF_PATH ||
       'steamapps/workshop/appworkshop_221100.acf',
+    gameRoot: process.env.SERVER_GAME_ROOT || '',
+    metaTimestampToleranceSeconds: Number(
+      process.env.SERVER_META_TIMESTAMP_TOLERANCE_SECONDS || 0
+    ),
     readyTimeout: Number(process.env.SFTP_READY_TIMEOUT_MS || 20000),
     searchRoot: process.env.SERVER_SFTP_SEARCH_ROOT || '.',
     searchDepth: Number(process.env.SERVER_SFTP_SEARCH_DEPTH || 6),
@@ -182,12 +190,57 @@ client.on('interactionCreate', async (interaction) => {
 
       try {
         const installedState = await getInstalledWorkshopState(config.sftp);
+        const workshopMods = config.modIds.length
+          ? await getWorkshopDetails(config.modIds)
+          : [];
+        const monitored = new Set(config.modIds.map(String));
+        const verifiableMonitored = [...monitored].filter((id) =>
+          installedState.items.has(id)
+        );
+        const missingMonitored = [...monitored].filter(
+          (id) => !installedState.items.has(id)
+        );
+        const missingText = missingMonitored.length
+          ? missingMonitored.slice(0, 12).join(', ') +
+            (missingMonitored.length > 12 ? ', …' : '')
+          : 'none';
+        const currentMatches = workshopMods.filter((mod) =>
+          matchesInstalledVersion(
+            mod,
+            installedState.items.get(String(mod.id)),
+            config.sftp.metaTimestampToleranceSeconds
+          )
+        );
+        const mismatchedCurrent = workshopMods.filter(
+          (mod) =>
+            installedState.items.has(String(mod.id)) &&
+            !matchesInstalledVersion(
+              mod,
+              installedState.items.get(String(mod.id)),
+              config.sftp.metaTimestampToleranceSeconds
+            )
+        );
+        const mismatchText = mismatchedCurrent.length
+          ? mismatchedCurrent
+              .slice(0, 8)
+              .map((mod) => mod.id)
+              .join(', ') + (mismatchedCurrent.length > 8 ? ', …' : '')
+          : 'none';
 
         await interaction.editReply({
           content: [
-            '✅ Server Workshop manifest verification succeeded.',
-            `📄 Path: \`${installedState.path}\``,
-            `📦 Installed Workshop items found: **${installedState.items.size}**`
+            '✅ Server Workshop verification succeeded.',
+            `📄 ACF path: \`${installedState.path}\``,
+            `📁 Game root: \`${installedState.gameRoot}\``,
+            `🔐 Exact ACF manifests: **${installedState.acfItems.size}**`,
+            `🧾 Valid mod meta.cpp files: **${installedState.metaItems.size}** / ${installedState.modFoldersScanned} @Mod folders`,
+            `📦 Monitored mods verifiable: **${verifiableMonitored.length} / ${monitored.size}**`,
+            `✅ Current versions confirmed: **${currentMatches.length} / ${monitored.size}**`,
+            `⚠️ Missing monitored IDs: ${missingText}`,
+            `⏳ Installed version differs: ${mismatchText}`,
+            installedState.metaScanError
+              ? `ℹ️ Meta scan: ${installedState.metaScanError}`
+              : 'ℹ️ Meta scan: no errors'
           ].join('\n')
         });
       } catch (error) {
