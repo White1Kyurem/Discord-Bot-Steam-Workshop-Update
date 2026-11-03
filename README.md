@@ -6,7 +6,8 @@
 - Shows Steam preview image
 - Detects the required server offline/online restart cycle
 - Reads `appworkshop_221100.acf` from the DayZ server over SFTP
-- Compares the Steam Workshop content manifest with the installed manifest
+- Scans every installed `@Mod/meta.cpp` when GTX lists only part of the mods
+- Prefers exact ACF manifest IDs and otherwise verifies the installed Workshop update timestamp
 - Announces an update only when it was installed before the server came online
 - Persists detected and pending updates in `DATA_DIR`
 - Beautiful dark purple Discord embed
@@ -34,6 +35,7 @@ SERVER_SFTP_USERNAME=YOUR_SFTP_USERNAME
 SERVER_SFTP_PASSWORD=YOUR_SFTP_PASSWORD
 SERVER_WORKSHOP_ACF_PATH=steamapps/workshop/appworkshop_221100.acf
 SERVER_SFTP_SEARCH_ROOT=.
+SERVER_META_TIMESTAMP_TOLERANCE_SECONDS=0
 DATA_DIR=/data
 ```
 
@@ -43,11 +45,15 @@ If the host exposes the manifest under another path, change
 manifest path or the exact verification error.
 
 After deploying, run `/checkmanifest` once. It tests the SFTP login, locates
-the ACF file and reports how many installed Workshop items were found without
-waiting for a real update. If the configured path is wrong, the bot searches
-the accessible SFTP folders automatically. If GTXGaming does not expose the
-file at all, the error also lists the visible root entries so another strict
-verification source can be selected.
+the ACF file, derives the DayZ game root and scans every direct `@Mod/meta.cpp`
+without waiting for a real update. The result reports exact ACF manifests,
+valid mod metadata, how many configured Workshop IDs can be verified and how
+many installed versions exactly match Steam. If
+automatic game-root detection is ever wrong, set `SERVER_GAME_ROOT` to the
+folder that directly contains the `@Mod` folders. Metadata timestamps must
+match Steam exactly by default. Keep
+`SERVER_META_TIMESTAMP_TOLERANCE_SECONDS=0` for the strictest behavior; only
+raise it if a known host-specific time offset has been verified.
 
 ## Start
 npm install
