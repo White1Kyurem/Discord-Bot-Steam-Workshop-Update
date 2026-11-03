@@ -1,154 +1,292 @@
+import fs from 'node:fs/promises';
+import path from 'node:path';
+
 import { getWorkshopDetails } from '../services/steam.js';
 import { checkServer } from '../services/server.js';
+import {
+  getInstalledWorkshopState,
+  matchesInstalledVersion
+} from '../services/server-workshop.js';
 import { createModEmbed } from '../services/embed.js';
 
-const lastKnownWorkshopUpdates = new Map();
+const STATE_FILE_NAME = 'steam-update-monitor-state.json';
+const lastKnownWorkshopVersions = new Map();
 const pendingUpdates = new Map();
 
+let stateLoaded = false;
+let loadedStatePath = '';
 let previousServerOnline = null;
+let lastVerificationAt = null;
+let lastVerificationError = '';
+let lastManifestPath = '';
 
-// Diese Flags gelten immer nur für den AKTUELLEN Pending-Batch
-let requiresOfflineCycleForPending = false;
-let offlineSeenAfterPending = false;
-let onlineSinceAfterPendingRestart = null;
+function safeNumber(value, fallback = 0) {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function getVersionKey(mod) {
+  const manifest = String(mod.manifest || '').trim();
+  if (manifest) return `manifest:${manifest}`;
+  return `updated:${safeNumber(mod.updated)}`;
+}
+
+function getStateFile(config) {
+  const dataDir = String(config.dataDir || './data').trim() || './data';
+  return path.resolve(dataDir, STATE_FILE_NAME);
+}
+
+async function loadState(config) {
+  const stateFile = getStateFile(config);
+  if (stateLoaded && loadedStatePath === stateFile) return;
+
+  lastKnownWorkshopVersions.clear();
+  pendingUpdates.clear();
+  previousServerOnline = null;
+  lastVerificationAt = null;
+  lastVerificationError = '';
+  lastManifestPath = '';
+
+  try {
+    const raw = await fs.readFile(stateFile, 'utf8');
+    const parsed = JSON.parse(raw);
+
+    for (const [modId, version] of Object.entries(parsed.lastKnown || {})) {
+      lastKnownWorkshopVersions.set(String(modId), String(version));
+    }
+
+    for (const [modId, pending] of Object.entries(parsed.pending || {})) {
+      if (!pending || typeof pending !== 'object') continue;
+
+      pendingUpdates.set(String(modId), {
+        ...pending,
+        id: String(pending.id || modId),
+        manifest: String(pending.manifest || ''),
+        updated: safeNumber(pending.updated),
+        detectedAt: safeNumber(pending.detectedAt, Date.now()),
+        offlineSeen: Boolean(pending.offlineSeen),
+        onlineSince: pending.onlineSince
+          ? safeNumber(pending.onlineSince)
+          : null,
+        installedAtOnline: Boolean(pending.installedAtOnline)
+      });
+    }
+
+    previousServerOnline =
+      typeof parsed.previousServerOnline === 'boolean'
+        ? parsed.previousServerOnline
+        : null;
+    lastVerificationAt = parsed.lastVerificationAt || null;
+    lastVerificationError = String(parsed.lastVerificationError || '');
+    lastManifestPath = String(parsed.lastManifestPath || '');
+  } catch (error) {
+    if (error?.code !== 'ENOENT') {
+      console.error('[STATE] Failed to load monitor state:', error);
+    }
+  }
+
+  stateLoaded = true;
+  loadedStatePath = stateFile;
+}
+
+async function saveState(config) {
+  const stateFile = getStateFile(config);
+  const stateDir = path.dirname(stateFile);
+  const temporaryFile = `${stateFile}.tmp`;
+
+  const payload = {
+    version: 2,
+    savedAt: new Date().toISOString(),
+    previousServerOnline,
+    lastVerificationAt,
+    lastVerificationError,
+    lastManifestPath,
+    lastKnown: Object.fromEntries(lastKnownWorkshopVersions),
+    pending: Object.fromEntries(pendingUpdates)
+  };
+
+  await fs.mkdir(stateDir, { recursive: true });
+  await fs.writeFile(temporaryFile, JSON.stringify(payload, null, 2), 'utf8');
+  await fs.rename(temporaryFile, stateFile);
+}
+
+function countPending(predicate) {
+  return [...pendingUpdates.values()].filter(predicate).length;
+}
 
 export function getMonitorStatus() {
   return {
     pendingCount: pendingUpdates.size,
-    requiresOfflineCycleForPending,
-    offlineSeenAfterPending,
-    onlineSinceAfterPendingRestart
+    awaitingOfflineCount: countPending((pending) => !pending.offlineSeen),
+    offlineSeenCount: countPending(
+      (pending) => pending.offlineSeen && !pending.onlineSince
+    ),
+    verifiedAtOnlineCount: countPending(
+      (pending) => pending.installedAtOnline && pending.onlineSince
+    ),
+    lastVerificationAt,
+    lastVerificationError,
+    lastManifestPath
   };
 }
 
+async function captureInstalledVersionsAtServerStart(config, now) {
+  const eligible = [...pendingUpdates.values()].filter(
+    (pending) => pending.offlineSeen
+  );
+
+  if (!eligible.length) return;
+
+  try {
+    const installedState = await getInstalledWorkshopState(config.sftp);
+    lastVerificationAt = new Date(now).toISOString();
+    lastVerificationError = '';
+    lastManifestPath = installedState.path;
+
+    for (const pending of eligible) {
+      const installed = installedState.items.get(String(pending.id));
+      const verified = matchesInstalledVersion(pending, installed);
+
+      if (verified) {
+        pending.installedAtOnline = true;
+        pending.onlineSince = now;
+        pending.installedManifest = String(installed?.manifest || '');
+
+        console.log(
+          `[VERIFIED] ${pending.title} (${pending.id}) was installed before the server came online.`
+        );
+      } else {
+        pending.offlineSeen = false;
+        pending.installedAtOnline = false;
+        pending.onlineSince = null;
+        pending.installedManifest = String(installed?.manifest || '');
+
+        console.log(
+          `[WAITING] ${pending.title} (${pending.id}) did not match the installed server manifest at startup. Waiting for the next offline cycle.`
+        );
+      }
+    }
+  } catch (error) {
+    lastVerificationAt = new Date(now).toISOString();
+    lastVerificationError = (error?.message || String(error)).slice(0, 700);
+
+    // A restart without a readable manifest is not accepted as proof.
+    // Requiring another offline cycle prevents a delayed SFTP read from
+    // incorrectly treating a post-start download as active on the server.
+    for (const pending of eligible) {
+      pending.offlineSeen = false;
+      pending.installedAtOnline = false;
+      pending.onlineSince = null;
+    }
+
+    console.error(
+      '[VERIFY] Could not confirm installed Workshop manifests. No update will be announced:',
+      error
+    );
+  }
+}
+
+async function announceVerifiedUpdates(config, client, now) {
+  const stableMs = safeNumber(config.onlineStableMs, 90_000);
+  const ready = [...pendingUpdates.entries()].filter(([, pending]) => {
+    return (
+      pending.installedAtOnline &&
+      pending.onlineSince &&
+      now - pending.onlineSince >= stableMs
+    );
+  });
+
+  if (!ready.length || !config.notificationsEnabled) return;
+
+  if (!config.channelId) {
+    console.warn('[WARN] Verified updates exist, but ANNOUNCE_CHANNEL_ID is not set.');
+    return;
+  }
+
+  const channel = await client.channels.fetch(config.channelId).catch(() => null);
+  if (!channel || !channel.isTextBased()) {
+    console.warn('[WARN] Announcement channel was not found or is not text based.');
+    return;
+  }
+
+  for (const [modId, mod] of ready) {
+    try {
+      await channel.send({ embeds: [createModEmbed(mod)] });
+      pendingUpdates.delete(modId);
+      console.log(
+        `[ANNOUNCED] ${mod.title} was verified as installed and announced.`
+      );
+    } catch (error) {
+      console.error(
+        `[ANNOUNCE] Failed to send the update for ${mod.title} (${modId}):`,
+        error
+      );
+    }
+  }
+}
+
 export async function runCheck(config, client) {
+  await loadState(config);
+
   const mods = await getWorkshopDetails(config.modIds);
   const serverOnline = await checkServer(config.host, config.queryPort);
   const now = Date.now();
-  const stableMs = Number(process.env.ONLINE_STABLE_SECONDS || 90) * 1000;
+
+  for (const mod of mods) {
+    const modId = String(mod.id);
+    const currentVersion = getVersionKey(mod);
+
+    if (!lastKnownWorkshopVersions.has(modId)) {
+      lastKnownWorkshopVersions.set(modId, currentVersion);
+      continue;
+    }
+
+    const previousVersion = lastKnownWorkshopVersions.get(modId);
+    if (currentVersion === previousVersion) continue;
+
+    lastKnownWorkshopVersions.set(modId, currentVersion);
+    pendingUpdates.set(modId, {
+      ...mod,
+      id: modId,
+      manifest: String(mod.manifest || ''),
+      detectedAt: now,
+      offlineSeen: false,
+      onlineSince: null,
+      installedAtOnline: false,
+      installedManifest: ''
+    });
+
+    console.log(
+      `[MOD DETECTED] ${mod.title} (${modId}) changed in the Workshop. Waiting for a verified server installation.`
+    );
+  }
 
   if (previousServerOnline === null) {
     previousServerOnline = serverOnline;
   }
 
-  let detectedNewPendingThisRun = false;
-
-  // 1) Workshop-Änderungen erkennen und als pending markieren
-  for (const mod of mods) {
-    const modId = String(mod.id);
-    const currentUpdated = Number(mod.updated);
-
-    if (!lastKnownWorkshopUpdates.has(modId)) {
-      lastKnownWorkshopUpdates.set(modId, currentUpdated);
-      continue;
-    }
-
-    const previousUpdated = lastKnownWorkshopUpdates.get(modId);
-
-    if (currentUpdated > previousUpdated) {
-      lastKnownWorkshopUpdates.set(modId, currentUpdated);
-
-      pendingUpdates.set(modId, {
-        ...mod,
-        detectedAt: now
-      });
-
-      detectedNewPendingThisRun = true;
-
-      console.log(
-        `[MOD DETECTED] ${mod.title} (${modId}) wurde im Workshop aktualisiert und als pending markiert.`
-      );
-    }
-  }
-
-  // 2) Wenn NEUE pending Updates erkannt wurden, muss für DIESE Updates
-  // ein neuer Offline-Zyklus stattfinden. Alte Offline-Zustände zählen nicht mehr.
-  if (detectedNewPendingThisRun) {
-    requiresOfflineCycleForPending = true;
-    offlineSeenAfterPending = false;
-    onlineSinceAfterPendingRestart = null;
-
-    console.log('[STATE] Neuer Pending-Batch erkannt. Warte auf neuen Offline-Zyklus.');
-  }
-
-  // 3) Serverstatus auswerten
   if (!serverOnline) {
     if (previousServerOnline !== false) {
-      console.log('[SERVER] Server ist jetzt offline.');
+      console.log('[SERVER] Server is now offline.');
     }
 
-    // Offline zählt nur, wenn wir aktuell wirklich auf einen neuen Offline-Zyklus warten
-    if (pendingUpdates.size > 0 && requiresOfflineCycleForPending) {
-      offlineSeenAfterPending = true;
-      onlineSinceAfterPendingRestart = null;
-      console.log('[STATE] Offline nach Pending erkannt.');
+    for (const pending of pendingUpdates.values()) {
+      pending.offlineSeen = true;
+      pending.onlineSince = null;
+      pending.installedAtOnline = false;
     }
 
     previousServerOnline = false;
+    await saveState(config);
     return;
   }
 
-  // Server ist online
-  if (previousServerOnline === false && serverOnline === true) {
-    console.log('[SERVER] Server ist wieder online.');
-
-    if (pendingUpdates.size > 0 && requiresOfflineCycleForPending && offlineSeenAfterPending) {
-      onlineSinceAfterPendingRestart = now;
-      console.log('[STATE] Online-Phase nach Pending-Restart gestartet.');
-    }
-  }
-
-  // Falls onlineSince noch nicht gesetzt wurde, aber wir schon in der relevanten Online-Phase sind
-  if (
-    serverOnline &&
-    pendingUpdates.size > 0 &&
-    requiresOfflineCycleForPending &&
-    offlineSeenAfterPending &&
-    onlineSinceAfterPendingRestart === null
-  ) {
-    onlineSinceAfterPendingRestart = now;
-  }
-
-  const isStableOnline =
-    onlineSinceAfterPendingRestart !== null &&
-    now - onlineSinceAfterPendingRestart >= stableMs;
-
-  // 4) Erst senden, wenn:
-  // - pending Updates existieren
-  // - für diese Updates ein neuer Offline-Zyklus gesehen wurde
-  // - der Server danach stabil online war
-  if (
-    pendingUpdates.size > 0 &&
-    requiresOfflineCycleForPending &&
-    offlineSeenAfterPending &&
-    isStableOnline
-  ) {
-    if (!config.channelId) {
-      console.warn('[WARN] Pending Updates vorhanden, aber keine channelId gesetzt.');
-      previousServerOnline = true;
-      return;
-    }
-
-    const channel = await client.channels.fetch(config.channelId);
-
-    if (!channel || !channel.isTextBased()) {
-      console.warn('[WARN] Zielchannel nicht gefunden oder nicht textbasiert.');
-      previousServerOnline = true;
-      return;
-    }
-
-    for (const [, mod] of pendingUpdates) {
-      await channel.send({ embeds: [createModEmbed(mod)] });
-      console.log(`[ANNOUNCED] ${mod.title} wurde nach neuem Restart als installiert gemeldet.`);
-    }
-
-    pendingUpdates.clear();
-    requiresOfflineCycleForPending = false;
-    offlineSeenAfterPending = false;
-    onlineSinceAfterPendingRestart = null;
-
-    console.log('[STATE] Pending-Batch abgeschlossen und zurückgesetzt.');
+  if (previousServerOnline === false) {
+    console.log('[SERVER] Server is online again. Verifying installed manifests.');
+    await captureInstalledVersionsAtServerStart(config, now);
   }
 
   previousServerOnline = true;
+  await announceVerifiedUpdates(config, client, now);
+  await saveState(config);
 }
