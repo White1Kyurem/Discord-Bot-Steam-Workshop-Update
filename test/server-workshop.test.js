@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import {
   decodeMetaTimestamp,
   getInstalledItemsFromVdf,
+  getInstalledVersionKey,
   matchesInstalledVersion,
   parseMetaCpp
 } from '../src/services/server-workshop.js';
@@ -81,18 +82,27 @@ test('does not confirm a mod missing from the installed manifest', () => {
   );
 });
 
-test('accepts a server meta.cpp timestamp close to the Workshop update time', () => {
-  const installed = {
+test('accepts a newer installed meta.cpp than the saved server baseline', () => {
+  const newerInstalled = {
     manifest: '',
-    updated: 1770000120,
-    source: 'meta'
+    updated: 1670101806,
+    source: 'meta',
+    metaTimestamp: '5249743004488005813'
   };
+  const unchangedInstalled = {
+    ...newerInstalled,
+    updated: 1670101805,
+    metaTimestamp: '5249743004478005813'
+  };
+  const baseline = getInstalledVersionKey(unchangedInstalled);
+
+  assert.equal(baseline, 'meta:5249743004478005813');
 
   assert.equal(
     matchesInstalledVersion(
       { manifest: '12345678901234567890', updated: 1770000000 },
-      installed,
-      300
+      newerInstalled,
+      baseline
     ),
     true
   );
@@ -100,16 +110,17 @@ test('accepts a server meta.cpp timestamp close to the Workshop update time', ()
   assert.equal(
     matchesInstalledVersion(
       { manifest: '12345678901234567890', updated: 1770000000 },
-      installed
+      unchangedInstalled,
+      baseline
     ),
     false
   );
 
   assert.equal(
     matchesInstalledVersion(
-      { manifest: '12345678901234567890', updated: 1769999000 },
-      installed,
-      300
+      { manifest: '12345678901234567890', updated: 1770000000 },
+      newerInstalled,
+      ''
     ),
     false
   );
@@ -123,8 +134,7 @@ test('never replaces an available exact ACF manifest check with time matching', 
         manifest: 'different',
         updated: 1770000000,
         source: 'acf'
-      },
-      300
+      }
     ),
     false
   );
