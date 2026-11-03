@@ -9,14 +9,14 @@ export function createModEmbed(mod) {
       [
         `**${mod.title}**`,
         '',
-        'This mod update is now active on your server.'
+        'The Steam Workshop manifest installed on the server now matches the latest published version.'
       ].join('\n')
     )
     .setURL(mod.url)
     .setColor(EMBED_COLOR)
     .addFields(
       { name: 'Mod ID', value: `\`${mod.id}\``, inline: true },
-      { name: 'Status', value: 'Installed on server', inline: true },
+      { name: 'Status', value: 'Verified installed', inline: true },
       {
         name: 'Workshop',
         value: `[View on Steam Workshop](${mod.url})`,
@@ -36,3 +36,4 @@ export function createTestModEmbed() {
     preview: 'https://shared.fastly.steamstatic.com/store_item_assets/steam/apps/221100/header.jpg'
   });
 }
+
