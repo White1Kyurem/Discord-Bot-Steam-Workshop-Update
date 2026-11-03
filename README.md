@@ -33,6 +33,7 @@ SERVER_SFTP_PORT=8822
 SERVER_SFTP_USERNAME=YOUR_SFTP_USERNAME
 SERVER_SFTP_PASSWORD=YOUR_SFTP_PASSWORD
 SERVER_WORKSHOP_ACF_PATH=steamapps/workshop/appworkshop_221100.acf
+SERVER_SFTP_SEARCH_ROOT=.
 DATA_DIR=/data
 ```
 
@@ -43,7 +44,10 @@ manifest path or the exact verification error.
 
 After deploying, run `/checkmanifest` once. It tests the SFTP login, locates
 the ACF file and reports how many installed Workshop items were found without
-waiting for a real update.
+waiting for a real update. If the configured path is wrong, the bot searches
+the accessible SFTP folders automatically. If GTXGaming does not expose the
+file at all, the error also lists the visible root entries so another strict
+verification source can be selected.
 
 ## Start
 npm install
