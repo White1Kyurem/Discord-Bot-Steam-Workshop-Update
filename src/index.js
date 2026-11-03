@@ -10,11 +10,7 @@ import {
 import { commands } from './commands/commands.js';
 import { runCheck, getMonitorStatus } from './monitor/engine.js';
 import { createTestModEmbed } from './services/embed.js';
-import { getWorkshopDetails } from './services/steam.js';
-import {
-  getInstalledWorkshopState,
-  matchesInstalledVersion
-} from './services/server-workshop.js';
+import { getInstalledWorkshopState } from './services/server-workshop.js';
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds]
@@ -40,9 +36,6 @@ const config = {
       process.env.SERVER_WORKSHOP_ACF_PATH ||
       'steamapps/workshop/appworkshop_221100.acf',
     gameRoot: process.env.SERVER_GAME_ROOT || '',
-    metaTimestampToleranceSeconds: Number(
-      process.env.SERVER_META_TIMESTAMP_TOLERANCE_SECONDS || 0
-    ),
     readyTimeout: Number(process.env.SFTP_READY_TIMEOUT_MS || 20000),
     searchRoot: process.env.SERVER_SFTP_SEARCH_ROOT || '.',
     searchDepth: Number(process.env.SERVER_SFTP_SEARCH_DEPTH || 6),
@@ -161,6 +154,9 @@ client.on('interactionCreate', async (interaction) => {
           }`,
           `🧾 Last verification: ${monitor.lastVerificationAt || 'not yet'}`,
           `⚠️ Verification error: ${monitor.lastVerificationError || 'none'}`,
+          `📸 Saved server-version baselines: ${monitor.installedSnapshotCount}`,
+          `🗓️ Last baseline scan: ${monitor.lastInstalledSnapshotAt || 'not yet'}`,
+          `⚠️ Baseline scan error: ${monitor.lastInstalledSnapshotError || 'none'}`,
           `📢 Channel: ${config.channelId || 'not set'}`
         ].join('\n'),
         flags: MessageFlags.Ephemeral
@@ -190,9 +186,6 @@ client.on('interactionCreate', async (interaction) => {
 
       try {
         const installedState = await getInstalledWorkshopState(config.sftp);
-        const workshopMods = config.modIds.length
-          ? await getWorkshopDetails(config.modIds)
-          : [];
         const monitored = new Set(config.modIds.map(String));
         const verifiableMonitored = [...monitored].filter((id) =>
           installedState.items.has(id)
@@ -204,28 +197,14 @@ client.on('interactionCreate', async (interaction) => {
           ? missingMonitored.slice(0, 12).join(', ') +
             (missingMonitored.length > 12 ? ', …' : '')
           : 'none';
-        const currentMatches = workshopMods.filter((mod) =>
-          matchesInstalledVersion(
-            mod,
-            installedState.items.get(String(mod.id)),
-            config.sftp.metaTimestampToleranceSeconds
-          )
+        const exactAcfMonitored = [...monitored].filter((id) =>
+          installedState.acfItems.has(id)
         );
-        const mismatchedCurrent = workshopMods.filter(
-          (mod) =>
-            installedState.items.has(String(mod.id)) &&
-            !matchesInstalledVersion(
-              mod,
-              installedState.items.get(String(mod.id)),
-              config.sftp.metaTimestampToleranceSeconds
-            )
+        const metaFallbackMonitored = [...monitored].filter(
+          (id) =>
+            installedState.metaItems.has(id) &&
+            !installedState.acfItems.has(id)
         );
-        const mismatchText = mismatchedCurrent.length
-          ? mismatchedCurrent
-              .slice(0, 8)
-              .map((mod) => mod.id)
-              .join(', ') + (mismatchedCurrent.length > 8 ? ', …' : '')
-          : 'none';
 
         await interaction.editReply({
           content: [
@@ -234,13 +213,14 @@ client.on('interactionCreate', async (interaction) => {
             `📁 Game root: \`${installedState.gameRoot}\``,
             `🔐 Exact ACF manifests: **${installedState.acfItems.size}**`,
             `🧾 Valid mod meta.cpp files: **${installedState.metaItems.size}** / ${installedState.modFoldersScanned} @Mod folders`,
-            `📦 Monitored mods verifiable: **${verifiableMonitored.length} / ${monitored.size}**`,
-            `✅ Current versions confirmed: **${currentMatches.length} / ${monitored.size}**`,
+            `📦 Monitored mods covered: **${verifiableMonitored.length} / ${monitored.size}**`,
+            `🔒 Exact ACF checks ready: **${exactAcfMonitored.length}**`,
+            `🔄 meta.cpp change checks ready: **${metaFallbackMonitored.length}**`,
             `⚠️ Missing monitored IDs: ${missingText}`,
-            `⏳ Installed version differs: ${mismatchText}`,
             installedState.metaScanError
               ? `ℹ️ Meta scan: ${installedState.metaScanError}`
-              : 'ℹ️ Meta scan: no errors'
+              : 'ℹ️ Meta scan: no errors',
+            '📸 Server-version baselines are saved automatically while the server is online.'
           ].join('\n')
         });
       } catch (error) {
